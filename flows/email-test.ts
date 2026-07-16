@@ -7,7 +7,7 @@ import {
 // SAFETY: while TEST_MODE is true, every email in every STGC flow goes ONLY to TEST_EMAIL,
 // never to a real registrant. We flip TEST_MODE to false only when going live.
 const TEST_MODE = true;
-const TEST_EMAIL = 'ugcvarnica@gmail.com';
+const TEST_EMAIL = 'itismevarnica@gmail.com';
 
 // Sender + brand constants. Until the shesthatgirl.co domain is verified in Resend, the email
 // address must stay on BubbleLab's system domain; we keep Sophia's name on it and route replies

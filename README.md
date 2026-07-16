@@ -117,6 +117,28 @@ The plan is six flows. **Only Flow 1 is built so far.**
 
 ---
 
+## How the email copy is changed
+
+Every email flow keeps its wording in one labeled **`EMAIL_COPY`** block at the top of the
+file, separated from the HTML. Sophia (or anyone) changes what registrants receive by editing
+the text inside the quotes — nothing else.
+
+- **Where:** `flows/flow-1-signup-confirmation.ts` → the `EMAIL_COPY` block near the top
+  (subject, heading, greeting, intro, CTA label, body `paragraphs`, sign-off, P.S.).
+- **Tokens:** keep `{firstName}`, `{title}`, `{date}`, `{time}`, `{link}` exactly as written —
+  they auto-fill per registrant. Everything else is free text.
+- **Add/remove a paragraph:** add or remove a line in `paragraphs`.
+- **Don't touch** `buildConfirmationHtml()` — that's only the branded styling wrapper.
+- **To go live:** editing this repo does nothing on its own. Apply the same `EMAIL_COPY`
+  change to **BubbleLab flow 12919** (in the `bubblelab-svinasco` account) and re-run it once
+  to confirm — the flow validates and sends to the test inbox while `TEST_MODE` is on.
+
+The full approved copy for **all 8 emails** (Seq 1 built; Seq 2–3 + Beacons + brand outreach
+not built yet) lives in [`docs/email-pipelines.md`](docs/email-pipelines.md). Build flows 2–6
+by lifting the copy from there into the same `EMAIL_COPY` pattern.
+
+> Test recipient is hardwired to **itismevarnica@gmail.com** only while `TEST_MODE = true`.
+
 ## Known caveats / open items
 
 - ⚠️ **Midnight-UTC time bug.** `/api/content` currently returns the masterclass date at

@@ -12,7 +12,7 @@ const API_CONTENT_URL = 'https://shesthatgirl.co/api/content';
 
 // SAFETY: while TEST_MODE is true, confirmations go ONLY to these inboxes, never a real registrant.
 const TEST_MODE = true;
-const TEST_RECIPIENTS = ['ugcvarnica@gmail.com', 'itismevarnica@gmail.com'];
+const TEST_RECIPIENTS = ['itismevarnica@gmail.com'];
 
 // Sender identity. Address stays on BubbleLab's system domain until shesthatgirl.co verifies in Resend;
 // swap FROM_ADDRESS to "Sophia · She's That Girl Co. <hello@shesthatgirl.co>" after verification.
@@ -20,6 +20,39 @@ const FROM_ADDRESS = "She's That Girl Co. <welcome@hello.bubblelab.ai>";
 const REPLY_TO = 'hello@shesthatgirl.co';
 const UNSUB_MAILTO = 'unsubscribe@shesthatgirl.co';
 const DEFAULT_TITLE = "She's That Girl Co. Free Masterclass";
+
+// ============================================================================
+//  EMAIL COPY  —  Sophia edits ONLY this block to change the confirmation email.
+//  --------------------------------------------------------------------------
+//  How to change what registrants receive:
+//   * Change the words inside the quotes. That's it.
+//   * Keep every {curly token} exactly as written — they auto-fill per registrant:
+//       {firstName}  {title}  {date}  {time}  {link}
+//   * To add or remove a paragraph, add or remove a line in `paragraphs` (keep the
+//     quotes and the trailing comma).
+//   * Do NOT touch buildConfirmationHtml() below — that is just the styling wrapper.
+//  After editing here, re-run the flow once to confirm it still sends.
+// ============================================================================
+const EMAIL_COPY = {
+  subject: "You're in, girl. Here's your link 🤍",
+  heading: "You're in, girl. 🤍",
+  greeting: 'Hey {firstName}!',
+  intro: "You're officially registered for the <b>{title}</b> and I am so excited to see you there.",
+  detailsIntro: "Here's everything you need:",
+  ctaLabel: 'Join the Masterclass',
+  paragraphs: [
+    "Screenshot this, set a reminder, do what you gotta do. Just don't miss it.",
+    'Financial freedom is possible. A better life IS possible. And it starts with showing up.',
+    'See you inside.',
+  ],
+  signoff: 'Sophia 🤍',
+  ps: "P.S. Can't make it live? Just reply and let me know. I got you.",
+};
+
+// Replaces {firstName}/{title}/{date}/{time}/{link} tokens inside any copy string above.
+function fill(text: string, tokens: Record<string, string>): string {
+  return text.replace(/\{(\w+)\}/g, (_m, k) => tokens[k] ?? '');
+}
 
 // ---- Brand tokens (from the live site) ----------------------------------
 const BRAND = {
@@ -107,9 +140,14 @@ function signupExists(values: string[][], id: string, email: string): boolean {
   return false;
 }
 
-// Branded Seq-1 confirmation. Edit the copy here to change what registrants receive.
+// Branded Seq-1 confirmation. This is only the STYLING wrapper — to change the words,
+// edit EMAIL_COPY at the top of the file, not here.
 function buildConfirmationHtml(firstName: string, mc: McInfo): string {
   const timeLabel = `${mc.displayTime} ${mc.timezone}`;
+  const tokens: Record<string, string> = { firstName, title: mc.title, date: mc.displayDate, time: timeLabel, link: mc.link };
+  const bodyParagraphs = EMAIL_COPY.paragraphs
+    .map((p) => `<p style="margin:0 0 16px;">${fill(p, tokens)}</p>`)
+    .join('\n        ');
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500;1,600&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet"></head>
   <body style="margin:0;padding:0;background:${BRAND.pageBg};">
@@ -120,23 +158,21 @@ function buildConfirmationHtml(firstName: string, mc: McInfo): string {
         <div style="margin-top:12px;font-family:${BRAND.sans};font-size:12px;letter-spacing:3px;color:${BRAND.heading};font-weight:600;">SHE'S THAT GIRL CO.</div>
       </div>
       <div style="padding:34px 34px 12px;color:${BRAND.body};font-size:15px;line-height:1.65;">
-        <h1 style="font-family:${BRAND.serif};font-weight:600;color:${BRAND.heading};font-size:30px;margin:0 0 6px;">You're in, girl. 🤍</h1>
-        <p style="margin:0 0 16px;">Hey ${firstName}!</p>
-        <p style="margin:0 0 16px;">You're officially registered for the <b>${mc.title}</b> and I am so excited to see you there.</p>
-        <p style="margin:0 0 10px;">Here's everything you need:</p>
+        <h1 style="font-family:${BRAND.serif};font-weight:600;color:${BRAND.heading};font-size:30px;margin:0 0 6px;">${fill(EMAIL_COPY.heading, tokens)}</h1>
+        <p style="margin:0 0 16px;">${fill(EMAIL_COPY.greeting, tokens)}</p>
+        <p style="margin:0 0 16px;">${fill(EMAIL_COPY.intro, tokens)}</p>
+        <p style="margin:0 0 10px;">${fill(EMAIL_COPY.detailsIntro, tokens)}</p>
         <div style="background:${BRAND.softBg};border:1px solid ${BRAND.softBorder};border-radius:14px;padding:20px 22px;margin:6px 0 22px;">
           <p style="margin:3px 0;"><span style="color:${BRAND.accent};font-weight:600;">Date</span> &nbsp;·&nbsp; ${mc.displayDate}</p>
           <p style="margin:3px 0;"><span style="color:${BRAND.accent};font-weight:600;">Time</span> &nbsp;·&nbsp; ${timeLabel}</p>
           <p style="margin:3px 0;"><span style="color:${BRAND.accent};font-weight:600;">Your link</span> &nbsp;·&nbsp; <a href="${mc.link}" style="color:${BRAND.accent};">${mc.link}</a></p>
         </div>
         <div style="text-align:center;margin:0 0 24px;">
-          <a href="${mc.link}" style="display:inline-block;background:${BRAND.accent};color:#ffffff;font-family:${BRAND.sans};font-weight:600;font-size:14px;letter-spacing:.5px;text-decoration:none;padding:13px 32px;border-radius:999px;">Join the Masterclass</a>
+          <a href="${mc.link}" style="display:inline-block;background:${BRAND.accent};color:#ffffff;font-family:${BRAND.sans};font-weight:600;font-size:14px;letter-spacing:.5px;text-decoration:none;padding:13px 32px;border-radius:999px;">${fill(EMAIL_COPY.ctaLabel, tokens)}</a>
         </div>
-        <p style="margin:0 0 16px;">Screenshot this, set a reminder, do what you gotta do. Just don't miss it.</p>
-        <p style="margin:0 0 16px;">Financial freedom is possible. A better life IS possible. And it starts with showing up.</p>
-        <p style="margin:0 0 4px;">See you inside.</p>
-        <p style="font-family:${BRAND.serif};font-style:italic;font-size:22px;color:${BRAND.heading};margin:8px 0 2px;">Sophia 🤍</p>
-        <p style="color:#8a7d7d;font-size:13px;margin:14px 0 0;">P.S. Can't make it live? Just reply and let me know. I got you.</p>
+        ${bodyParagraphs}
+        <p style="font-family:${BRAND.serif};font-style:italic;font-size:22px;color:${BRAND.heading};margin:8px 0 2px;">${fill(EMAIL_COPY.signoff, tokens)}</p>
+        <p style="color:#8a7d7d;font-size:13px;margin:14px 0 0;">${fill(EMAIL_COPY.ps, tokens)}</p>
       </div>
       <div style="padding:22px 34px 28px;border-top:1px solid ${BRAND.hairline};margin-top:18px;">
         <p style="color:${BRAND.footer};font-size:11.5px;line-height:1.6;margin:0;">
@@ -246,10 +282,13 @@ export class StgcSignupFlow extends BubbleFlow<'webhook/http'> {
   }
 
   // Sends the branded confirmation instantly. Recipients are the safe test inboxes while TEST_MODE is on.
+  // Subject + body come from EMAIL_COPY at the top of the file.
   private async sendConfirmation(firstName: string, mc: McInfo, recipients: string[]) {
+    const timeLabel = `${mc.displayTime} ${mc.timezone}`;
+    const subjectTokens: Record<string, string> = { firstName, title: mc.title, date: mc.displayDate, time: timeLabel, link: mc.link };
     const confirmationMailer = new ResendBubble({
       operation: 'send_email', from: FROM_ADDRESS, reply_to: REPLY_TO, to: recipients,
-      subject: "You're in, girl. Here's your link 🤍",
+      subject: fill(EMAIL_COPY.subject, subjectTokens),
       html: buildConfirmationHtml(firstName, mc),
       headers: { 'List-Unsubscribe': `<mailto:${UNSUB_MAILTO}?subject=Unsubscribe>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' },
     });
