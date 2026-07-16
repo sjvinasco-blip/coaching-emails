@@ -11,6 +11,56 @@ BubbleLab editor.
 
 ---
 
+## For Hardik — start here
+
+**What this is:** the email/automation backend for She's That Girl Co. (STGC), Sophia's
+coaching brand. It is a set of [BubbleLab](https://bubblelab.ai) flows — TypeScript files
+that extend `BubbleFlow` and orchestrate "bubbles" (Google Sheets, Resend email, HTTP,
+AI agents). They are **not** a normal Node app: there is no local server, no `npm start`.
+Each flow runs in the BubbleLab cloud and is triggered by a webhook or a cron.
+
+**How the pieces fit:**
+- **Data lives in one Google Sheet** — `STGC Masterclass Engine`
+  (id `1Qq19urGgtU3JuYvTbHd7o_3cjE7lvpOwQk9313AqNk0`), 5 tabs. Column schemas are the
+  `HEADERS` object at the top of `flows/setup-and-migrate.ts`. Read that first — it's the
+  data model for the whole system.
+- **Signups** come in from the website (`shesthatgirl.co`) as a webhook → Flow 1 handles
+  intake + confirmation email.
+- **The current masterclass** (date/time/zoom link) is not hardcoded; Flow 1 fetches it
+  live from `https://shesthatgirl.co/api/content` so Sophia can change it from her site
+  admin without touching code.
+- **Email** goes out through Resend. Until the `shesthatgirl.co` domain is verified, mail
+  sends from a BubbleLab system address with Sophia's name; replies route to
+  `hello@shesthatgirl.co`.
+
+**What's actually built:** the 4 files in `flows/` (see table below). Of the planned
+6-flow funnel, **only Flow 1 is built** — flows 2–6 are the open work. The
+outreach flow is a separate B2B/brand tool.
+
+**To change a flow (the critical workflow):**
+1. Edit the `.ts` file here and open a PR so it's reviewed + versioned.
+2. **Re-apply the same change to the live flow in the `bubblelab-svinasco` BubbleLab
+   account** (by flow ID — see the table). Editing this repo alone does **nothing** to
+   what runs in production; the repo is a mirror, not a deploy source. To get access to
+   the BubbleLab account, ask Varnica/Sophia.
+3. Run the flow in BubbleLab to validate before relying on it.
+
+**Golden rules — do not break these** (details in *Conventions* below):
+- `TEST_MODE = true` on every email flow means mail only goes to test inboxes. **Never**
+  flip it to `false` except at real go-live. If you're testing, keep it `true`.
+- No em dashes in any customer-facing copy (brand voice). The outreach flow enforces this
+  in code; keep it.
+- Don't hardcode a masterclass date/time — read it from `/api/content`.
+
+**Before you start anything real:** skim the *Known caveats* and *Go-live checklist* at
+the bottom — several things (Resend domain, real masterclass time, Zoom, Beacons list)
+are blocked on external setup that only Sophia can do.
+
+**Who's who:** Varnica (`vchabria`) built the flows; Sophia (`sjvinasco-blip`) owns this
+repo and the brand; Hardik (`znatri`) is extending it.
+
+---
+
 ## What's in here
 
 | File | BubbleLab flow ID | Status | What it does |
