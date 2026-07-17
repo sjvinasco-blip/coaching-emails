@@ -61,7 +61,8 @@ credential. **Nothing is active** — every flow is `isActive: false`, `cronActi
 | `flow-3-nurture.ts` | 13256 | cron `0 15 * * *` | Day 0/2/3/5/7 sequence toward the offers. Day 0 is attendance-gated |
 | `flow-4-brand-inbound.ts` | 13257 | webhook | Brand inquiry → `BrandLeads` + auto-reply + notify Sophia |
 | `flow-5-reengagement.ts` | 13258 | cron `0 16 * * 2` | Invites warm `Leads`, excluding current registrants |
-| `flow-6-attendance.ts` | 13259 | webhook | Accepts an attendee list, marks Attended / No-show. `DRY_RUN` previews |
+| `flow-6-attendance.ts` | 13259 | webhook | Accepts a **pasted** attendee list, marks Attended / No-show. `DRY_RUN` previews |
+| `flow-6b-zoom-attendance.ts` | 13277 | webhook | Pulls the attendee list **straight from Zoom** (S2S OAuth), then the same reconcile. `DRY_RUN` previews |
 
 Supporting files, **not deployed to org 5034**: `setup-and-migrate.ts` (one-time sheet creation +
 legacy migration; still the schema source of truth), `email-test.ts` (single-template harness),
@@ -96,13 +97,38 @@ never write the zone yourself. Don't touch the `build*Html()` functions — they
 
 The approved copy for every email lives in [`docs/email-pipelines.md`](docs/email-pipelines.md).
 
-## BubbleLab gotchas the validator enforces
+## Zoom attendance (Flow 6b)
 
-Not documented in `read-flow-rules`; each one rejects the flow:
+Attendance is pulled from Zoom's Report API via a **Server-to-Server OAuth** app on the
+`svinasco@shesthatgirl.co` Zoom account (Pro plan). It reuses Flow 6's reconcile-and-write step, so
+the paste path (Flow 6) stays as a fallback that needs no Zoom setup.
+
+- **Credential:** the app's `client_id:client_secret`, **base64-encoded**, stored as a
+  `CUSTOM_AUTH_KEY` (id 2862). The `account_id` (`LqhPROKCT8WQEZ_ALBfrWA`) is not secret and lives in
+  the flow constant. Scope required: `report:read:list_meeting_participants:admin`.
+- **Why base64 pre-encoded:** BubbleLab's `HttpBubble` `authType: 'basic'` emits `Basic <stored
+  value>` **without** base64-encoding it (confirmed via request echo). Storing the already-encoded
+  value is the workaround; `authType: 'basic'` then produces a valid header.
+- **The masterclass is a recurring meeting** (id `91498122584`, type 3), so attendance is
+  per-occurrence: the flow lists ended instances, matches the one on the cohort's local date, and
+  pulls that occurrence's participants. Pass `occurrenceUuid` to override the date match.
+- **Verified live:** token exchange, meeting resolution, and a real participant fetch
+  (`attendeesFetched > 0`) all work. Guests who join without signing in have no email in Zoom's
+  report and are counted as `attendeesWithoutEmail` (unmatchable).
+- **How to run it:** after a masterclass, POST `{ "masterclassId": "YYYY-MM-DD" }` to the flow's
+  webhook with `dryRun` on to preview, then `dryRun: false` to write. Zoom's report can lag a few
+  minutes after a session ends.
+- **Future option:** the S2S app's Secret Token is for a `meeting.ended` Zoom webhook, which would
+  let this run automatically per session instead of manually. Not built yet.
+
+## BubbleLab gotchas the validator (and runtime) enforce
+
+Not documented in `read-flow-rules`; each one bites:
 
 - A **method call inside a ternary** cannot be instrumented. Use `if`/`else`.
 - A `schedule/cron` `handle()` **must** take a `payload: CronEvent`, even if unused.
 - The cron must be a **`readonly cronSchedule = '...'` class property**.
+- `HttpBubble` `authType: 'basic'` does **not** base64-encode — store the pre-encoded value.
 - Also: private methods cannot call other private methods (loops live in `handle()`), no `throw` or
   `try/catch` in `handle()`, no `any`, and every bubble needs its own uniquely-named `const`.
 

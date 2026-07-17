@@ -70,6 +70,25 @@ then deleted. The real flows (13254, 13258) were never modified; verified afterw
 *genuine* `/api/content` clock. Re-run Flows 2 and 5 unmodified once a future masterclass date is
 set at `/admin` — that is the last untested seam.
 
+### ✅ Zoom attendance integration (Flow 6b) — verified live 2026-07-17
+
+Server-to-Server OAuth against the `svinasco@shesthatgirl.co` Zoom account (Pro). Proven:
+- Token exchange works **inside BubbleLab** (after the `HttpBubble` base64 workaround — see README).
+- The masterclass meeting (`91498122584`, "Creator Masterclass") is on this account.
+- A real participant report was fetched (`attendeesFetched: 1`) and reconciled under `dryRun`.
+
+Not yet possible to prove: an attendee **whose email matches a signup** flipping to `Attended` —
+the masterclass has not been hosted on this meeting yet (0 ended occurrences). It is the same set
+membership Flow 6 uses. Re-run Flow 6b after the first real session.
+
+- [ ] ⚠️ **Rotate the Zoom Client Secret.** It passed through chat. Regenerate it in the Zoom
+      Marketplace, then update credential 2862 (store base64 of `client_id:new_secret`).
+- [ ] **Delete unused credential 2861** (raw `client_id:client_secret`, superseded by the base64
+      cred 2862). No MCP delete tool exists — remove it in the BubbleLab UI.
+- [ ] Decide whether attendance runs **manually** per class (POST `{masterclassId}` to Flow 6b) or
+      **automatically** via a Zoom `meeting.ended` webhook (the S2S app's Secret Token is for this;
+      not built).
+
 ### ⛔ Test rows to purge before go-live
 
 Fake addresses, inert while flows are inactive, but they **suppress re-sends to those keys** and
