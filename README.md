@@ -69,6 +69,48 @@ repo and the brand; Hardik (`znatri`) is extending it.
 | `flows/email-test.ts` | **12917** | ✅ built + tested | Safety harness: sends ONE branded sample confirmation to a single hardwired inbox. Used to validate the template. |
 | `flows/flow-1-signup-confirmation.ts` | **12919** | ✅ built + tested | **Flow 1 of 6.** Webhook signup intake → reads the live masterclass from `shesthatgirl.co/api/content` → dedupes → writes to the sheet → sends the branded confirmation email instantly. |
 | `flows/outreach-enrich-draft.ts` | **12926** | ✅ built | Brand/B2B outreach: enriches a pasted company list via Crustdata, drafts a personalized call-booking email per contact (no em dashes), writes drafts to a sheet, optionally sends. |
+### The 6-flow funnel — deployed to Sophia's account (org 5034)
+
+> ⚠️ **These live in a DIFFERENT BubbleLab account from the four above.** They were created in
+> `sjvinasco@gmail.com` / **org 5034** ("Sophia Juliette I's Workspace"), because that is the only
+> account we have an MCP token for. The original flows (12916–12926) are in
+> `svinasco@shesthatgirl.co` / **org 5033**, which nobody on the team can currently reach. So Flow 1
+> now exists **twice**: as 12919 in org 5033 and as 13255 in org 5034. Decide which account is the
+> real home before go-live.
+
+| File | Flow ID (org 5034) | Trigger | Status | What it does |
+|------|--------------------|---------|--------|--------------|
+| `flows/flow-1-signup-confirmation.ts` | **13255** | webhook | ✅ run + verified | Signup intake → dedupe → save → branded confirmation with the live Zoom link. |
+| `flows/flow-2-reminders.ts` | **13254** | cron `*/15 * * * *` | ⚠️ emails verified via temp copy | Day-before + 1-hour-before reminders, windowed so each sends exactly once and a late registrant never gets a stale "tomorrow" email. Fails closed on unusable timing. |
+| `flows/flow-3-nurture.ts` | **13256** | cron `0 15 * * *` | ✅ run + verified | Post-masterclass sequence at day 0/2/3/5/7. All five approved emails present; `ACTIVE_SEQUENCE` controls which send. Day 0 gated on attendance. |
+| `flows/flow-4-brand-inbound.ts` | **13257** | webhook | ✅ run + verified | Brand inquiry → `BrandLeads` + auto-reply + notify Sophia. Payload matches what the site posts today. |
+| `flows/flow-5-reengagement.ts` | **13258** | cron `0 16 * * 2` | ⚠️ email verified via temp copy | Invites warm `Leads` to the live masterclass, excluding anyone already registered. **The Beacons list does not exist yet.** |
+| `flows/flow-6-attendance.ts` | **13259** | webhook | ✅ run + verified | Accepts an attendee list (Zoom CSV paste or manual), marks Attended / No-show. `DRY_RUN` previews. |
+
+**Webhook URLs** (for the `stgc-learn` repo, once you repoint it):
+- `WEBHOOK_URL` → `https://api.nodex.bubblelab.ai/webhook/user_3FxhYVXJBYjQpcQr4aDE2uRHrrY/e7rP72XYSf5g`
+- `BRAND_WEBHOOK_URL` → `https://api.nodex.bubblelab.ai/webhook/user_3FxhYVXJBYjQpcQr4aDE2uRHrrY/scjNgUKVVTr1`
+
+**What "verified" means.** All six compile under BubbleLab's validator (a real typecheck — it caught
+three things static review could not), run successfully against the live engine sheet, and **all 11
+emails have been rendered and delivered to the test inbox**. Proven by execution: duplicate
+suppression, email normalization, `TEST_MODE` routing, the correct `CDT` label, the attendance gate,
+the send caps, and fail-closed behaviour on bad timing.
+
+**Flows 2 and 5 are the caveat.** `/api/content` currently advertises a class in the past, so both
+correctly refuse to run. Their emails were exercised through temporary copies with only the class
+time injected (since deleted; the real flows were never modified). **Re-run both unmodified once a
+future masterclass date is set at `/admin`** — that is the last untested seam.
+
+**Nothing is armed.** All six are `isActive: false`, `cronActive: false`. No cron fires, no webhook
+is live. Before activating anything, purge the test rows listed in
+[`docs/validation-checklist.md`](docs/validation-checklist.md) — the fixture cohorts keep coming due.
+
+**BubbleLab rules the validator enforces that are NOT in `read-flow-rules`** (learned the hard way,
+worth knowing before editing):
+- A method call inside a **ternary** is rejected: *"cannot be instrumented"*. Use `if`/`else`.
+- A `schedule/cron` flow's `handle()` **must** take a `payload: CronEvent` parameter, even unused.
+- The cron must be a **`readonly cronSchedule = '...'` class property**, not just configured in the UI.
 
 ---
 
@@ -141,12 +183,17 @@ by lifting the copy from there into the same `EMAIL_COPY` pattern.
 
 ## Known caveats / open items
 
-- ⚠️ **Midnight-UTC time bug.** `/api/content` currently returns the masterclass date at
-  midnight UTC with no real time set, so confirmations render "12:00 AM". Sophia must set a
-  real time at `shesthatgirl.co/admin` before Flow 2 (reminders) timing is correct.
-- ⚠️ **Zoom attendance.** The current masterclass link is LSU institutional Zoom
-  (`lsu.zoom.us`) — no API attendance available from an org-owned account. Flow 6 needs Sophia
-  hosting on her own Zoom Pro+, or a recap-open / manual fallback.
+- ✅ ~~**Midnight-UTC time bug.**~~ **Resolved (verified 2026-07-16).** `/api/content` now returns a
+  real time: `stgc_settings.date = "2026-07-17T02:00:00.000Z"`, which is 9:00 PM CDT. The flows still
+  treat midnight-UTC as a code path that must fail closed, but it is no longer the current state.
+  ⚠️ A harder question replaced it: the label says `CST` while the instant is CDT, so if `/admin`
+  naively applies a fixed −6 offset, Sophia's intended time may be an hour earlier than what renders.
+  Someone must check what `/admin` actually stores.
+- ⚠️ **Zoom attendance.** ~~LSU institutional Zoom~~ — `/api/content` now returns a plain
+  `zoom.us/j/...` link, and Sophia has a brand-owned Zoom login, so this may be unblocked. **But the
+  plan tier is unconfirmed**, and Zoom's participant-report API needs a paid plan on the hosting
+  account. `flows/flow-6-attendance.ts` therefore accepts attendance via webhook/CSV, which works
+  either way; a Zoom pull can later replace its input without touching the matching logic.
 - **Website webhooks** (`stgc-learn` repo: `WEBHOOK_URL`, `BRAND_WEBHOOK_URL`) still point at
   the old cloud BubbleLab account and must be repointed to the new `svinasco` webhooks + redeployed.
 

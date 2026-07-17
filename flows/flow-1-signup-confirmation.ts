@@ -21,6 +21,11 @@ const REPLY_TO = 'hello@shesthatgirl.co';
 const UNSUB_MAILTO = 'unsubscribe@shesthatgirl.co';
 const DEFAULT_TITLE = "She's That Girl Co. Free Masterclass";
 
+// Identifies this email within the funnel. EmailLog.email_key is built from
+// masterclass_id + normalized email + this id, so later flows (reminders, nurture) can ask
+// "was this exact email already sent to this exact person for this exact masterclass?".
+const SEQ_ID = 'seq1';
+
 // ============================================================================
 //  EMAIL COPY  —  Sophia edits ONLY this block to change the confirmation email.
 //  --------------------------------------------------------------------------
@@ -85,6 +90,37 @@ function firstNameOf(fullName: string): string {
   return t ? t.split(/\s+/)[0] : 'there';
 }
 
+// The one place an email address is canonicalised. Everything that stores, compares, or keys on an
+// address goes through this, so " Sophia@Gmail.com " from a paste and "sophia@gmail.com" from the
+// form are treated as the same person rather than registering twice and being emailed twice.
+function normalizeEmail(raw: string): string {
+  return (raw || '').trim().toLowerCase();
+}
+
+function isValidEmail(emailNorm: string): boolean {
+  return emailNorm.length > 0 && emailNorm.includes('@');
+}
+
+// Builds the deterministic EmailLog key. Self-contained by design: the key alone answers
+// "already sent?" with one exact string match, without depending on how signup_id was formatted.
+function emailKey(mcId: string, emailNorm: string, seqId: string): string {
+  return `${mcId}:${emailNorm}:${seqId}`;
+}
+
+// True only when a SUCCESSFUL send is on record. Failed sends are logged with a ':failed' suffix,
+// so they never match here and the confirmation can still be retried.
+function emailKeyExists(values: string[][], key: string): boolean {
+  for (let i = 1; i < values.length; i++) { if ((values[i]?.[3] ?? '') === key) return true; }
+  return false;
+}
+
+// Guards against emailing someone a confirmation we cannot actually honour. A masterclass without a
+// resolvable date or a real link would render "TBA" and a dead Join button, so we would rather fail
+// the webhook (and let it retry) than deliver a registration the person cannot act on.
+function isUsableMasterclass(mc: McInfo): boolean {
+  return mc.id !== 'unknown' && mc.link.startsWith('http');
+}
+
 // Parses the /api/content body and pulls out the current masterclass settings.
 function parseSettings(bodyText: string): McSettings {
   try {
@@ -112,7 +148,9 @@ function ianaFor(tz: string): string {
 // The masterclass id is the local calendar date so each masterclass is tracked as its own cohort.
 function formatMasterclass(s: McSettings): McInfo {
   const tz = ianaFor(s.timezone);
-  let id = s.dateIso ? s.dateIso.slice(0, 10) : 'unknown';
+  // Stays 'unknown' unless the date actually parses. Deriving the id from the raw string first
+  // would let an unparseable admin entry like "17/07/2026" become a permanent cohort id.
+  let id = 'unknown';
   let displayDate = 'TBA';
   let displayTime = 'TBA';
   if (s.dateIso) {
@@ -120,7 +158,10 @@ function formatMasterclass(s: McSettings): McInfo {
     if (!isNaN(d.getTime())) {
       id = d.toLocaleDateString('en-CA', { timeZone: tz });
       displayDate = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: tz });
-      displayTime = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz });
+      // timeZoneName renders the zone that is actually in effect on this date, so a July class shows
+      // "9:00 PM CDT" rather than the admin's literal "CST" label, which would name an instant an
+      // hour off and send anyone who reads it literally to the wrong time.
+      displayTime = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz, timeZoneName: 'short' });
     }
   }
   return { id, title: DEFAULT_TITLE, displayDate, displayTime, timezone: s.timezone || 'CST', link: s.link };
@@ -131,11 +172,11 @@ function masterclassExists(values: string[][], id: string): boolean {
   return false;
 }
 
-function signupExists(values: string[][], id: string, email: string): boolean {
-  const target = email.toLowerCase();
+function signupExists(values: string[][], id: string, emailNorm: string): boolean {
   for (let i = 1; i < values.length; i++) {
     const row = values[i] ?? [];
-    if ((row[1] ?? '') === id && (row[3] ?? '').toLowerCase() === target) return true;
+    // Normalises the stored side too, so rows written before addresses were canonicalised still match.
+    if ((row[1] ?? '') === id && normalizeEmail(row[3] ?? '') === emailNorm) return true;
   }
   return false;
 }
@@ -143,7 +184,8 @@ function signupExists(values: string[][], id: string, email: string): boolean {
 // Branded Seq-1 confirmation. This is only the STYLING wrapper — to change the words,
 // edit EMAIL_COPY at the top of the file, not here.
 function buildConfirmationHtml(firstName: string, mc: McInfo): string {
-  const timeLabel = `${mc.displayTime} ${mc.timezone}`;
+  // displayTime already carries the correct zone abbreviation for this date (see formatMasterclass).
+  const timeLabel = mc.displayTime;
   const tokens: Record<string, string> = { firstName, title: mc.title, date: mc.displayDate, time: timeLabel, link: mc.link };
   const bodyParagraphs = EMAIL_COPY.paragraphs
     .map((p) => `<p style="margin:0 0 16px;">${fill(p, tokens)}</p>`)
@@ -189,7 +231,10 @@ function buildConfirmationHtml(firstName: string, mc: McInfo): string {
 export interface Output {
   status: string;
   masterclassId?: string;
+  /** Where the mail actually went. Under TEST_MODE this is the test inbox, not the registrant. */
   sentTo?: string[];
+  /** The real registrant this email was meant for, always shown so TEST_MODE runs stay auditable. */
+  intendedTo?: string;
   emailId?: string;
   message?: string;
 }
@@ -197,39 +242,81 @@ export interface Output {
 export class StgcSignupFlow extends BubbleFlow<'webhook/http'> {
   async handle(payload: SignupPayload): Promise<Output> {
     const { name, email, handle = '', date } = payload;
-    if (!email || !email.includes('@')) {
+    const emailNorm = normalizeEmail(email);
+    if (!isValidEmail(emailNorm)) {
       return { status: 'error', message: 'A valid email is required.' };
     }
 
+    // Every read below is checked before use. Previously a failure fell back to an empty default and
+    // the flow carried on, which turned an outage into a confirmation email with "TBA" and a dead
+    // link. Returning an error instead lets the website's webhook retry once the dependency recovers.
     const contentRes = await this.fetchContent();
+    if (!contentRes.success) {
+      return { status: 'error', message: 'Could not read the current masterclass; signup not processed. Retry.' };
+    }
     const bodyText = (contentRes.data?.body ?? '') as string;
     const mc = formatMasterclass(parseSettings(bodyText));
+    if (!isUsableMasterclass(mc)) {
+      return { status: 'error', message: 'Masterclass has no usable date or link; signup not processed. Check /admin.' };
+    }
 
     const mcRead = await this.readMasterclasses();
+    if (!mcRead.success) {
+      return { status: 'error', message: 'Could not read Masterclasses; signup not processed. Retry.' };
+    }
     const mcValues = (mcRead.data?.values ?? []) as string[][];
     if (!masterclassExists(mcValues, mc.id)) {
       await this.appendMasterclass(mc);
     }
 
+    // A failed Signups read used to make signupExists() return false, which under a load spike
+    // produced a duplicate row AND a second confirmation to someone already registered.
     const suRead = await this.readSignups();
+    if (!suRead.success) {
+      return { status: 'error', message: 'Could not read Signups; signup not processed. Retry.' };
+    }
     const suValues = (suRead.data?.values ?? []) as string[][];
-    if (signupExists(suValues, mc.id, email)) {
-      return { status: 'duplicate', masterclassId: mc.id, message: 'Already registered for this masterclass.' };
+    const alreadySignedUp = signupExists(suValues, mc.id, emailNorm);
+
+    // The signup row and the confirmation are tracked separately. Being in Signups is not proof the
+    // confirmation was delivered, so a person who registered but whose email failed must still be
+    // able to get it. Only a successful EmailLog key means "this person has their link".
+    const logRead = await this.readEmailLog();
+    if (!logRead.success) {
+      return { status: 'error', message: 'Could not read EmailLog; signup not processed. Retry.' };
+    }
+    const logValues = (logRead.data?.values ?? []) as string[][];
+    const alreadyConfirmed = emailKeyExists(logValues, emailKey(mc.id, emailNorm, SEQ_ID));
+
+    if (alreadySignedUp && alreadyConfirmed) {
+      return {
+        status: 'duplicate',
+        masterclassId: mc.id,
+        intendedTo: emailNorm,
+        message: 'Already registered and confirmed for this masterclass.',
+      };
     }
 
     const firstName = firstNameOf(name);
     const signedUpAt = date || new Date().toISOString();
-    await this.appendSignup(mc.id, firstName, email, handle, signedUpAt);
+    if (!alreadySignedUp) {
+      const appendRes = await this.appendSignup(mc.id, firstName, emailNorm, handle, signedUpAt);
+      if (!appendRes.success) {
+        return { status: 'error', masterclassId: mc.id, message: 'Could not save the signup; not processed. Retry.' };
+      }
+    }
 
-    const recipients = TEST_MODE ? TEST_RECIPIENTS : [email];
+    const recipients = TEST_MODE ? TEST_RECIPIENTS : [emailNorm];
     const sendRes = await this.sendConfirmation(firstName, mc, recipients);
-    await this.appendEmailLog(mc.id, email, sendRes.success);
+    await this.appendEmailLog(mc.id, emailNorm, sendRes.success);
 
     return {
-      status: 'registered',
+      status: sendRes.success ? 'registered' : 'registered_email_failed',
       masterclassId: mc.id,
       sentTo: recipients,
+      intendedTo: emailNorm,
       emailId: sendRes.data?.email_id,
+      message: sendRes.success ? undefined : 'Signup saved but the confirmation email failed. Retrying this webhook resends it.',
     };
   }
 
@@ -261,21 +348,33 @@ export class StgcSignupFlow extends BubbleFlow<'webhook/http'> {
     return await signupsReader.action();
   }
 
+  // Reads the EmailLog tab so we can tell "registered" apart from "registered and actually emailed".
+  private async readEmailLog() {
+    const emailLogReader = new GoogleSheetsBubble({ operation: 'read_values', spreadsheet_id: ENGINE_SHEET_ID, range: 'EmailLog' });
+    return await emailLogReader.action();
+  }
+
   // Appends the new registrant to the Signups tab, keyed by masterclass+email and marked Registered.
-  private async appendSignup(mcId: string, firstName: string, email: string, handle: string, signedUpAt: string) {
+  // The email is already normalized by the caller, so signup_id is stable for the same person.
+  private async appendSignup(mcId: string, firstName: string, emailNorm: string, handle: string, signedUpAt: string) {
     const signupWriter = new GoogleSheetsBubble({
       operation: 'append_values', spreadsheet_id: ENGINE_SHEET_ID, range: 'Signups!A1',
-      values: [[`${mcId}:${email}`, mcId, firstName, email, handle, signedUpAt, 'website', 'Registered', '']],
+      values: [[`${mcId}:${emailNorm}`, mcId, firstName, emailNorm, handle, signedUpAt, 'website', 'Registered', '']],
       value_input_option: 'RAW', insert_data_option: 'INSERT_ROWS',
     });
     return await signupWriter.action();
   }
 
-  // Logs that the Seq-1 confirmation was sent, for idempotency and the analytics dashboard.
-  private async appendEmailLog(mcId: string, email: string, ok: boolean) {
+  // Records the outcome of the Seq-1 confirmation. email_key carries the full composite identity
+  // (masterclass + person + sequence) rather than a bare label, which is what lets this flow and every
+  // later one ask "already sent?" with a single exact match. A failure is written with a ':failed'
+  // suffix so it can never be mistaken for a delivery, and the next attempt will resend.
+  // Column B always holds the real registrant, even under TEST_MODE when the mail went elsewhere.
+  private async appendEmailLog(mcId: string, emailNorm: string, ok: boolean) {
+    const key = emailKey(mcId, emailNorm, SEQ_ID);
     const emailLogWriter = new GoogleSheetsBubble({
       operation: 'append_values', spreadsheet_id: ENGINE_SHEET_ID, range: 'EmailLog!A1',
-      values: [[`${mcId}:${email}`, email, 'seq1', ok ? 'confirmation' : 'confirmation_failed', new Date().toISOString()]],
+      values: [[`${mcId}:${emailNorm}`, emailNorm, SEQ_ID, ok ? key : `${key}:failed`, new Date().toISOString()]],
       value_input_option: 'RAW', insert_data_option: 'INSERT_ROWS',
     });
     return await emailLogWriter.action();
@@ -284,7 +383,7 @@ export class StgcSignupFlow extends BubbleFlow<'webhook/http'> {
   // Sends the branded confirmation instantly. Recipients are the safe test inboxes while TEST_MODE is on.
   // Subject + body come from EMAIL_COPY at the top of the file.
   private async sendConfirmation(firstName: string, mc: McInfo, recipients: string[]) {
-    const timeLabel = `${mc.displayTime} ${mc.timezone}`;
+    const timeLabel = mc.displayTime;
     const subjectTokens: Record<string, string> = { firstName, title: mc.title, date: mc.displayDate, time: timeLabel, link: mc.link };
     const confirmationMailer = new ResendBubble({
       operation: 'send_email', from: FROM_ADDRESS, reply_to: REPLY_TO, to: recipients,
