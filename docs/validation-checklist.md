@@ -85,9 +85,12 @@ membership Flow 6 uses. Re-run Flow 6b after the first real session.
       Marketplace, then update credential 2862 (store base64 of `client_id:new_secret`).
 - [ ] **Delete unused credential 2861** (raw `client_id:client_secret`, superseded by the base64
       cred 2862). No MCP delete tool exists — remove it in the BubbleLab UI.
-- [ ] Decide whether attendance runs **manually** per class (POST `{masterclassId}` to Flow 6b) or
-      **automatically** via a Zoom `meeting.ended` webhook (the S2S app's Secret Token is for this;
-      not built).
+- [ ] Attendance now runs **automatically** via Flow 6c (13279, hourly cron poll) — verified live
+      returning "no sessions ended" cleanly. **Activate it and set `DRY_RUN=false` after the first
+      real masterclass.** Flow 6b (13277) remains for manual backfill of a single session.
+- [ ] **Zoom link auto-populates** via Flow 1's fallback (13255) — if `/api/content` has no link,
+      Flow 1 fetches Zoom's `join_url`. Verified on both paths. Sophia may now leave the link blank
+      in the site admin. Date/time still come from `/api/content`.
 
 ### ⛔ Test rows to purge before go-live
 
@@ -96,8 +99,9 @@ would **bounce** once `TEST_MODE=false` (bounces damage sender reputation).
 
 - [ ] `Masterclasses`: every row titled **"TEST FIXTURE - delete me"** (`2026-07-09`, `2026-07-11`,
       `2026-07-13`, `2026-07-14`)
-- [ ] `Signups`: `flow1-verify-`, `nurture-verify-`, `nurture-d0/d2/d5/d7-`, `reminder-verify-`
-      (all `*-20260717@example.com`), plus pre-existing `refactor-check-20260716@example.com`
+- [ ] `Signups`: `flow1-verify-`, `nurture-verify-`, `nurture-d0/d2/d5/d7-`, `reminder-verify-`,
+      `zoom-normal-`, `zoom-fallback-` (all `*-20260717@example.com`), plus pre-existing
+      `refactor-check-20260716@example.com`
 - [ ] `Leads`: `lead-verify-20260717@example.com` (status will read `Nurturing`)
 - [ ] `BrandLeads`: `brand-verify-20260717@example.com`, `autoreply-verify-20260717@example.com`
 - [ ] `EmailLog`: every row whose `email_key` contains one of the addresses above

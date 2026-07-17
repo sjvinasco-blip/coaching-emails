@@ -10,6 +10,14 @@ import {
 const ENGINE_SHEET_ID = '1Qq19urGgtU3JuYvTbHd7o_3cjE7lvpOwQk9313AqNk0';
 const API_CONTENT_URL = 'https://shesthatgirl.co/api/content';
 
+// Zoom fallback: if /api/content does not supply a masterclass link, the join link is fetched from
+// Zoom instead, so the link never has to be pasted into the site admin. This only fires when the
+// link is blank, so the normal path is unchanged. The masterclass runs on one recurring room whose
+// join link is stable, hence a fixed meeting id. account_id is not a secret; the client credentials
+// live in a CUSTOM_AUTH_KEY (base64 of client_id:client_secret) attached to the token bubble.
+const ZOOM_ACCOUNT_ID = 'LqhPROKCT8WQEZ_ALBfrWA';
+const ZOOM_MEETING_ID = '91498122584';
+
 // SAFETY: while TEST_MODE is true, confirmations go ONLY to these inboxes, never a real registrant.
 const TEST_MODE = true;
 const TEST_RECIPIENTS = ['itismevarnica@gmail.com'];
@@ -99,6 +107,14 @@ function normalizeEmail(raw: string): string {
 
 function isValidEmail(emailNorm: string): boolean {
   return emailNorm.length > 0 && emailNorm.includes('@');
+}
+
+// Tolerant JSON parse for HTTP response bodies (which arrive as text), used for the Zoom fallback.
+function parseJson(body: unknown): Record<string, unknown> {
+  if (typeof body === 'string') {
+    try { return JSON.parse(body) as Record<string, unknown>; } catch { return {}; }
+  }
+  return (body ?? {}) as Record<string, unknown>;
 }
 
 // Builds the deterministic EmailLog key. Self-contained by design: the key alone answers
@@ -256,6 +272,20 @@ export class StgcSignupFlow extends BubbleFlow<'webhook/http'> {
     }
     const bodyText = (contentRes.data?.body ?? '') as string;
     const mc = formatMasterclass(parseSettings(bodyText));
+
+    // If the site did not supply a link, fill it from Zoom so the link never has to be pasted into
+    // the admin. Only runs when the link is blank AND the date resolved, so the normal path is
+    // untouched; if Zoom is unreachable the link stays blank and the guard below still fails closed.
+    if (mc.id !== 'unknown' && !mc.link) {
+      const zoomTokenRes = await this.getZoomToken();
+      const zoomToken = (parseJson(zoomTokenRes.data?.body).access_token as string) ?? '';
+      if (zoomToken) {
+        const meetingRes = await this.getZoomMeeting(zoomToken);
+        const joinUrl = (parseJson(meetingRes.data?.body).join_url as string) ?? '';
+        if (joinUrl.startsWith('http')) mc.link = joinUrl;
+      }
+    }
+
     if (!isUsableMasterclass(mc)) {
       return { status: 'error', message: 'Masterclass has no usable date or link; signup not processed. Check /admin.' };
     }
@@ -324,6 +354,29 @@ export class StgcSignupFlow extends BubbleFlow<'webhook/http'> {
   private async fetchContent() {
     const contentFetcher = new HttpBubble({ url: API_CONTENT_URL, method: 'GET', responseType: 'text' });
     return await contentFetcher.action();
+  }
+
+  // Exchanges the stored Server-to-Server client credentials (base64 in a CUSTOM_AUTH_KEY, sent as
+  // HTTP Basic) for a 1-hour Zoom token. Only called when the site supplied no link.
+  private async getZoomToken() {
+    const zoomTokenExchanger = new HttpBubble({
+      url: 'https://zoom.us/oauth/token',
+      method: 'POST', authType: 'basic', responseType: 'text',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'grant_type=account_credentials&account_id=' + ZOOM_ACCOUNT_ID,
+    });
+    return await zoomTokenExchanger.action();
+  }
+
+  // Reads the masterclass room so we can use its stable join_url as the link. The room is recurring,
+  // so this link is the same for every cohort.
+  private async getZoomMeeting(token: string) {
+    const zoomMeetingReader = new HttpBubble({
+      url: 'https://api.zoom.us/v2/meetings/' + ZOOM_MEETING_ID,
+      method: 'GET', responseType: 'text',
+      headers: { Authorization: 'Bearer ' + token },
+    });
+    return await zoomMeetingReader.action();
   }
 
   // Reads the Masterclasses tab to check whether this masterclass is already recorded.

@@ -62,7 +62,8 @@ credential. **Nothing is active** — every flow is `isActive: false`, `cronActi
 | `flow-4-brand-inbound.ts` | 13257 | webhook | Brand inquiry → `BrandLeads` + auto-reply + notify Sophia |
 | `flow-5-reengagement.ts` | 13258 | cron `0 16 * * 2` | Invites warm `Leads`, excluding current registrants |
 | `flow-6-attendance.ts` | 13259 | webhook | Accepts a **pasted** attendee list, marks Attended / No-show. `DRY_RUN` previews |
-| `flow-6b-zoom-attendance.ts` | 13277 | webhook | Pulls the attendee list **straight from Zoom** (S2S OAuth), then the same reconcile. `DRY_RUN` previews |
+| `flow-6b-zoom-attendance.ts` | 13277 | webhook | Pulls one session's attendees **from Zoom** (S2S OAuth) on demand, then the same reconcile. `DRY_RUN` |
+| `flow-6c-zoom-attendance-cron.ts` | 13279 | cron `0 * * * *` | **Automatic attendance.** Hourly poll of Zoom for recently-ended sessions → reconcile. `DRY_RUN` |
 
 Supporting files, **not deployed to org 5034**: `setup-and-migrate.ts` (one-time sheet creation +
 legacy migration; still the schema source of truth), `email-test.ts` (single-template harness),
@@ -118,8 +119,21 @@ the paste path (Flow 6) stays as a fallback that needs no Zoom setup.
 - **How to run it:** after a masterclass, POST `{ "masterclassId": "YYYY-MM-DD" }` to the flow's
   webhook with `dryRun` on to preview, then `dryRun: false` to write. Zoom's report can lag a few
   minutes after a session ends.
-- **Future option:** the S2S app's Secret Token is for a `meeting.ended` Zoom webhook, which would
-  let this run automatically per session instead of manually. Not built yet.
+- **Automatic (Flow 6c):** an hourly cron polls Zoom for sessions ended in the last 3 days and
+  reconciles them, so nobody triggers anything. A poll is used instead of a `meeting.ended` webhook
+  because the webhook needs an HMAC challenge-response the flow runtime may not support; the poll
+  needs no Zoom event config and survives a missed event. Flip it on (and set `DRY_RUN=false`) after
+  the first real session. The S2S app's Secret Token is only needed if you later switch to the
+  webhook.
+
+## The masterclass link auto-populates (Flow 1)
+
+Sophia no longer has to paste the Zoom link into the site admin. Zoom's `join_url` for the recurring
+room is identical to what `/api/content` served, so **Flow 1 fetches it from Zoom whenever
+`/api/content` supplies no link** — a fallback that only fires when the link is blank, leaving the
+normal path untouched. The date and time still come from `/api/content` (Zoom holds no fixed time
+for a recurring room). Uses the same S2S credential; verified on both paths (link present →
+unchanged; link blank → Zoom link fetched into the email).
 
 ## BubbleLab gotchas the validator (and runtime) enforce
 
