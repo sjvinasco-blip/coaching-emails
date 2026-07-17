@@ -81,10 +81,12 @@ Not yet possible to prove: an attendee **whose email matches a signup** flipping
 the masterclass has not been hosted on this meeting yet (0 ended occurrences). It is the same set
 membership Flow 6 uses. Re-run Flow 6b after the first real session.
 
-- [ ] ⚠️ **Rotate the Zoom Client Secret.** It passed through chat. Regenerate it in the Zoom
-      Marketplace, then update credential 2862 (store base64 of `client_id:new_secret`).
-- [ ] **Delete unused credential 2861** (raw `client_id:client_secret`, superseded by the base64
-      cred 2862). No MCP delete tool exists — remove it in the BubbleLab UI.
+- [x] ~~Rotate the Zoom Client Secret.~~ **Skipped by decision (2026-07-17).** The secret passed
+      through chat and is stored in credential 2862; the team has accepted this rather than rotating.
+      If that changes, regenerate it in the Zoom Marketplace and update 2862 (base64 of
+      `client_id:new_secret`).
+- [ ] *(optional cleanup)* Delete unused credential 2861 (raw `client_id:client_secret`, superseded
+      by the base64 cred 2862) in the BubbleLab UI. Not urgent — no flow references it.
 - [ ] Attendance now runs **automatically** via Flow 6c (13279, hourly cron poll) — verified live
       returning "no sessions ended" cleanly. **Activate it and set `DRY_RUN=false` after the first
       real masterclass.** Flow 6b (13277) remains for manual backfill of a single session.
